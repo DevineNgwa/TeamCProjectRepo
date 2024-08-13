@@ -1,0 +1,279 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template with Lambda functions for DynamoDB, S3, and Glue Job'
+
+Parameters:
+  ApiName:
+    Type: String
+    Default: 'RestAPI-1'
+    Description: 'Name of the API Gateway'
+  
+  DynamoDBFunctionName:
+    Type: String
+    Default: 'DynamoDBFunction'
+    Description: 'Name of the Lambda function for DynamoDB operations'
+
+  S3FunctionName:
+    Type: String
+    Default: 'S3Function'
+    Description: 'Name of the Lambda function for S3 operations'
+
+  GlueFunctionName:
+    Type: String
+    Default: 'GlueFunction'
+    Description: 'Name of the Lambda function for Glue operations'
+
+  TableName:
+    Type: String
+    Default: 'TeamCCFNDB'
+    Description: 'Name of the DynamoDB table'
+
+  BucketName:
+    Type: String
+    Default: 'TeamCCFNS3'
+    Description: 'Name of the S3 bucket'
+
+  GlueScriptBucket:
+    Type: String
+    Description: 'S3 bucket where Glue script is located'
+
+Resources:
+  # IAM Roles
+  DynamoDBRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: 'DynamoDBAccessRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'DynamoDBFullAccessPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'dynamodb:BatchGetItem'
+                  - 'dynamodb:BatchWriteItem'
+                  - 'dynamodb:ConditionCheckItem'
+                  - 'dynamodb:CreateTable'
+                  - 'dynamodb:DeleteItem'
+                  - 'dynamodb:DescribeTable'
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:ListTables'
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:Query'
+                  - 'dynamodb:Scan'
+                  - 'dynamodb:UpdateItem'
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}'
+
+  S3Role:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: 'S3AccessRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'S3FullAccessPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                  - 's3:ListBucket'
+                  - 's3:DeleteObject'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${BucketName}'
+                  - !Sub 'arn:aws:s3:::${BucketName}/*'
+
+  GlueRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: 'GlueJobRole6'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'GlueJobPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'glue:*'
+                Resource: '*'
+              - Effect: 'Allow'
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${GlueScriptBucket}'
+                  - !Sub 'arn:aws:s3:::${GlueScriptBucket}/*'
+              - Effect: 'Allow'
+                Action:
+                  - 'logs:*'
+                Resource: '*'
+
+  # Lambda Functions
+  DynamoDBFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Ref DynamoDBFunctionName
+      Runtime: 'python3.9'
+      Handler: 'dynamodb_function.lambda_handler'
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table('${TeamCCFND}')  # Using DynamoDB table name from parameters
+
+          def lambda_handler(event, context):
+              if event.get('action') == 'put':
+                  response = table.put_item(
+                      Item={
+                          'id': event['id'],
+                          'data': event['data']
+                      }
+                  )
+              elif event.get('action') == 'get':
+                  response = table.get_item(
+                      Key={
+                          'id': event['id']
+                      }
+                  )
+              else:
+                  response = {'message': 'Unsupported action'}
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps(response)
+              }
+
+      Role: !GetAtt DynamoDBRole.Arn
+
+  S3Function:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Ref S3FunctionName
+      Runtime: 'python3.9'
+      Handler: 's3_function.lambda_handler'
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+
+          s3 = boto3.client('s3')
+          bucket_name = '${TeamCCFNS3}'  # Using S3 bucket name from parameters
+
+          def lambda_handler(event, context):
+              if event.get('action') == 'put':
+                  s3.put_object(Bucket=bucket_name, Key=event['key'], Body=event['body'])
+                  response = {'message': 'Object uploaded'}
+              elif event.get('action') == 'get':
+                  response = s3.get_object(Bucket=bucket_name, Key=event['key'])
+                  body = response['Body'].read().decode('utf-8')
+                  response = {'body': body}
+              else:
+                  response = {'message': 'Unsupported action'}
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps(response)
+              }
+
+      Role: !GetAtt S3Role.Arn
+
+  GlueFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Ref GlueFunctionName
+      Runtime: 'python3.9'
+      Handler: 'glue_function.lambda_handler'
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+
+          glue = boto3.client('glue')
+          job_name = 'TeamCCFNGlueJob'  # Replace with your Glue job name if different
+
+          def lambda_handler(event, context):
+              response = glue.start_job_run(JobName=job_name)
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({'jobRunId': response['JobRunId']})
+              }
+
+      Role: !GetAtt GlueRole.Arn
+
+  # API Gateway
+  RestAPI:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      Name: !Ref ApiName
+
+  # API Gateway Resources
+  DynamoDBResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref RestAPI
+      ParentId: !GetAtt RestAPI.RootResourceId
+      PathPart: 'dynamodb'
+
+  S3Resource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref RestAPI
+      ParentId: !GetAtt RestAPI.RootResourceId
+      PathPart: 's3'
+
+  GlueResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref RestAPI
+      ParentId: !GetAtt RestAPI.RootResourceId
+      PathPart: 'glue'
+
+  # Lambda Permissions for API Gateway
+  DynamoDBFunctionApiPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref DynamoDBFunction
+      Principal: 'apigateway.amazonaws.com'
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestAPI}/*/*/dynamodb'
+
+  S3FunctionApiPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref S3Function
+      Principal: 'apigateway.amazonaws.com'
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestAPI}/*/*/s3'
+
+  GlueFunctionApiPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref GlueFunction
+      Principal: 'apigateway.amazonaws.com'
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestAPI}/*/*/glue'
+
+Outputs:
+  ApiUrl:
+    Description: 'URL of the API Gateway'
+    Value: !Sub 'https://${RestAPI}.execute-api.${AWS::Region}.${AWS::URLSuffix}/'
